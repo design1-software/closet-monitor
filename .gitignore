@@ -15,3 +15,12 @@ build/
 *.bin
 *.elf
 EOF
+# Python
+subscriber/venv/
+subscriber/__pycache__/
+subscriber/.env
+*.pyc
+
+# Database (regenerable from logs/MQTT)
+data/*.db
+data/*.db-journal
