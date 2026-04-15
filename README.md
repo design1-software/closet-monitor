@@ -2,6 +2,10 @@
 
 An end-to-end IoT data pipeline for monitoring my home lab network closet — and the first node in a broader smart-home observability platform built around Home Assistant.
 
+![Live Dashboard](docs/screenshots/dashboard.png)
+
+*Live Streamlit dashboard: current readings, 24-hour summary, and interactive temperature/humidity/pressure/WiFi charts. Auto-refreshes every 30 seconds.*
+
 ## The story behind this project
 
 This project started as a single-evening exercise: wire up a microcontroller to a temperature sensor and prove I could do basic embedded work. By the time I had the firmware working and overnight data flowing, I realized the *interesting* problem wasn't the sensor — it was what to do with the telemetry it produced.
@@ -95,6 +99,7 @@ Tablet UIs   Lovelace      Cross-source   AI insights
 - **Subscriber:** Python 3 with paho-mqtt and python-dotenv
 - **Database:** SQLite 3
 - **Analysis:** Python with pandas, matplotlib, seaborn, scipy (Jupyter notebooks)
+- **Dashboard:** Streamlit + Plotly
 - **Toolchain:** `arduino-cli` for firmware, virtualenv for Python dependencies
 
 ## MQTT topics
@@ -145,17 +150,29 @@ CREATE TABLE events (
 
 ## Findings so far
 
-After ~16 hours of continuous operation:
+After ~36 hours of continuous operation:
 
-- **1,917 readings collected** with **zero packet loss** (intervals ranged 27.5 - 32.5s, target 30s)
+- **2,000+ readings collected** with **zero packet loss** (intervals ranged 27.5 - 32.5s, target 30s)
 - Temperature held within a tight 5.4°F band (71.8 → 77.2°F) with std dev of just 0.91°F
 - Humidity averaged 46.9% with one detected micro-event (4.4-point spike in 30 seconds, recovery within 90s)
 - WiFi signal strength steady at -67 dBm average
 - **15 HVAC cycles automatically detected** using rolling-mean smoothing + scipy peak detection
-- Cycle lengths split into two regimes: **short cycles (16-50 min) during evening peak hours**, **long cycles (100+ min) overnight** — consistent with healthy outside-temperature-driven HVAC behavior
+- Cycle lengths split into two distinct regimes: **short cycles (16-50 min) during evening peak hours**, **long cycles (100+ min) overnight** — consistent with healthy outside-temperature-driven HVAC behavior
 - Average temperature swing per cycle: 1.29°F (tight thermostat control)
 
 The cycle-length pattern is the most actionable insight: the closet's environment is being driven by the rest of the house's thermal load, not just its own internal heat sources. Cross-referencing this with ecobee schedule data (next phase) should let me quantify the thermal lag between the wall thermostat and the closet itself.
+
+### HVAC cycle detection
+
+![HVAC Cycles Detected](docs/screenshots/hvac-cycles.png)
+
+*Smoothed temperature signal with peaks (red ▼ = AC kick-on) and troughs (blue ▲ = AC turn-off) automatically detected via scipy peak-finding. 15 cycles identified across the observation window, with cycle lengths varying from 16 to 177 minutes depending on time of day.*
+
+### Time-series view
+
+![Temperature and Humidity Over Time](docs/screenshots/time-series.png)
+
+*Raw temperature (red) and humidity (blue) over the same window, dual-axis. The relationship is weakly correlated overall, but a clear inflection appears around 03:00 where humidity climbs as temperature drops — a signature of cooler conditioned air entering the space.*
 
 ## Setup
 
@@ -200,6 +217,14 @@ jupyter lab
 # Open 01-exploratory-analysis.ipynb
 ```
 
+### Dashboard
+
+```bash
+cd dashboard
+streamlit run dashboard.py
+# Opens automatically at http://localhost:8501
+```
+
 ## Design decisions
 
 - **JSON payloads** over binary — slightly more bandwidth, massively easier to debug with `mosquitto_sub -v` and to consume from any language. Also Home Assistant-friendly out of the box.
@@ -226,6 +251,10 @@ closet-monitor/
 │   └── .env.example                   # Subscriber config template
 ├── analysis/
 │   └── 01-exploratory-analysis.ipynb  # Jupyter notebook
+├── dashboard/
+│   └── dashboard.py                   # Streamlit live dashboard
+├── docs/
+│   └── screenshots/                   # README assets
 └── README.md
 ```
 
@@ -240,9 +269,9 @@ closet-monitor/
 - [x] HVAC cycle detection with scipy peak detection
 - [x] Cycle length analysis and time-of-day pattern identification
 - [x] Detected first real-world micro-event (05:38 AM humidity spike)
+- [x] Streamlit dashboard with live + 24-hour view
 
 ### Next
-- [ ] Streamlit dashboard for live + historical visualization (portable demo artifact)
 - [ ] Statistical anomaly detection (rolling-window z-score)
 - [ ] Ecobee API integration: pull thermostat data into the same database
 - [ ] Cross-correlation analysis: closet temp vs. thermostat schedule and reported temp
@@ -264,7 +293,7 @@ closet-monitor/
 
 ## Why this lives in one repo
 
-The temptation with a project like this is to split it into multiple repos — one for firmware, one for the subscriber service, one for analysis. I'm deliberately keeping them together because the *story* of this project is the integration. Anyone reading this repo can follow a single physical signal — temperature in a closet — through every stage of an end-to-end data system. That narrative is more valuable to me right now than the modularity. When a piece outgrows this layout (likely the dashboard, possibly the Home Assistant integration), it'll move to its own repo with proper boundaries.
+The temptation with a project like this is to split it into multiple repos — one for firmware, one for the subscriber service, one for analysis. I'm deliberately keeping them together because the *story* of this project is the integration. Anyone reading this repo can follow a single physical signal — temperature in a closet — through every stage of an end-to-end data system. That narrative is more valuable to me right now than the modularity. When a piece outgrows this layout (likely the Home Assistant integration), it'll move to its own repo with proper boundaries.
 
 ## Author
 
