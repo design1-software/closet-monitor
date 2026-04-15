@@ -2,9 +2,15 @@
 
 An end-to-end IoT data pipeline for monitoring my home lab network closet. An ESP32 microcontroller reads environmental conditions, publishes them over WiFi to an MQTT broker, and a Python service persists them to a local database for analysis, dashboarding, and AI-assisted insights.
 
-## Why
+## The story behind this project
 
-My home server — which runs a production MCP (Model Context Protocol) server and a Meta Engagement automation pipeline — lives in a network closet without active cooling or monitoring. A laptop running 24/7 in an enclosed space needs observability. This project adds eyes and ears to that closet, then turns the resulting telemetry into something I can actually learn from.
+This project started as a single-evening exercise: wire up a microcontroller to a temperature sensor and prove I could do basic embedded work. By the time I had the firmware working and overnight data flowing, I realized the *interesting* problem wasn't the sensor — it was what to do with the telemetry it produced.
+
+So I pivoted.
+
+What was a one-night embedded project became a multi-stage pipeline spanning **embedded systems → networking → backend services → data persistence → exploratory analysis → (next) dashboarding and AI insights.** Every layer is a deliberate learning surface. The goal isn't just to monitor my closet — it's to walk a complete data lifecycle with one cohesive dataset I actually understand and care about.
+
+The closet is real. My home server lives there, running a production MCP (Model Context Protocol) server and a Meta Engagement automation pipeline. A laptop running 24/7 in an enclosed space deserves observability, and now it has it.
 
 ## Architecture
 
@@ -55,6 +61,7 @@ analysis   dashboard      (planned)     (planned)
 - **Broker:** Eclipse Mosquitto 2.x
 - **Subscriber:** Python 3 with paho-mqtt and python-dotenv
 - **Database:** SQLite 3
+- **Analysis:** Python with pandas, matplotlib, seaborn (Jupyter notebooks)
 - **Toolchain:** `arduino-cli` for firmware, virtualenv for Python dependencies
 
 ## MQTT topics
@@ -84,7 +91,7 @@ analysis   dashboard      (planned)     (planned)
 ```sql
 CREATE TABLE readings (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    received_at     TEXT NOT NULL,         -- ISO 8601, server-side timestamp
+    received_at     TEXT NOT NULL,
     device_uptime_s INTEGER,
     temp_f          REAL,
     temp_c          REAL,
@@ -96,10 +103,22 @@ CREATE TABLE readings (
 CREATE TABLE events (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     received_at TEXT NOT NULL,
-    topic       TEXT NOT NULL,             -- status, alerts/*, etc.
+    topic       TEXT NOT NULL,
     payload     TEXT NOT NULL
 );
 ```
+
+## Early findings
+
+After ~16 hours of continuous operation:
+
+- **1,917 readings collected** with **zero packet loss** (every interval between 27.5s and 32.5s, target was 30s)
+- Temperature held within a tight 5.4°F band (71.8 → 77.2°F) with std dev of just 0.91°F — evidence of healthy HVAC behavior
+- Humidity averaged 46.9% with occasional brief spikes that don't correlate with temperature changes
+- WiFi signal strength held steady at -67 dBm average across the entire run
+- **Detected a brief humidity event at 05:38 AM:** humidity jumped 4.4 points in 30 seconds while temperature stayed flat, then recovered within 90 seconds. Signature suggests a brief introduction of moist air (door opening, nearby shower, or air movement) — too fast for HVAC, too localized for weather.
+
+The fact that the sensor caught and recorded a 90-second event without intervention is exactly the value proposition of continuous monitoring versus point-in-time checks.
 
 ## Setup
 
@@ -133,8 +152,16 @@ python subscriber.py
 
 In a separate terminal:
 ```bash
-mosquitto_sub -h <broker-ip> -t "home/closet/#" -v       # see live MQTT traffic
-sqlite3 data/closet.db "SELECT COUNT(*) FROM readings;"  # confirm rows accumulating
+mosquitto_sub -h <broker-ip> -t "home/closet/#" -v
+sqlite3 data/closet.db "SELECT COUNT(*) FROM readings;"
+```
+
+### Analysis
+
+```bash
+cd analysis
+jupyter lab
+# Open 01-exploratory-analysis.ipynb
 ```
 
 ## Design decisions
@@ -145,19 +172,23 @@ sqlite3 data/closet.db "SELECT COUNT(*) FROM readings;"  # confirm rows accumula
 - **Non-blocking main loop** — uses `millis()` timing instead of `delay()` so the MQTT client can service keepalives and reconnections between sensor reads.
 - **Separation of concerns** — credentials live in `config.h` (firmware) and `.env` (subscriber), both gitignored. Example templates are committed.
 - **Server-side timestamps** — the subscriber records `received_at` independently of the device's `uptime_s`, so reading order is preserved even if the device reboots.
+- **SQLite over Postgres for the first iteration** — single-file database, zero ops overhead, sufficient throughput for 30s sampling. When this moves to the production server with longer retention, migration to Postgres or DuckDB becomes a discrete decision rather than premature optimization.
 
 ## Repository layout
 
 ```
 closet-monitor/
-├── closet-monitor.ino          # ESP32 firmware (compiled with arduino-cli)
-├── config.example.h            # Firmware config template
+├── closet-monitor.ino                 # ESP32 firmware
+├── config.example.h                   # Firmware config template
 ├── data/
-│   └── sample-overnight-*.log  # Sample dataset for reference
+│   ├── sample-overnight-*.log         # Sample dataset for reference
+│   └── closet.db                      # Live SQLite database (gitignored)
 ├── subscriber/
-│   ├── subscriber.py           # Python MQTT → SQLite service
-│   ├── requirements.txt        # Python dependencies
-│   └── .env.example            # Subscriber config template
+│   ├── subscriber.py                  # Python MQTT → SQLite service
+│   ├── requirements.txt               # Python dependencies
+│   └── .env.example                   # Subscriber config template
+├── analysis/
+│   └── 01-exploratory-analysis.ipynb  # Jupyter notebook (in progress)
 └── README.md
 ```
 
@@ -167,13 +198,19 @@ closet-monitor/
 - [x] Threshold-based alerting (edge-triggered)
 - [x] Python subscriber with SQLite persistence
 - [x] Sample overnight dataset (~955 readings, 8 hours continuous)
-- [ ] Jupyter notebook: exploratory data analysis (HVAC cycle detection, trend analysis, anomalies)
+- [x] Initial exploratory analysis: descriptive stats, time-series plots, correlation
+- [x] Detected first real-world micro-event (05:38 AM humidity spike)
+- [ ] HVAC cycle detection (programmatic identification of cooling cycles)
+- [ ] Statistical anomaly detection (rolling-window z-score)
 - [ ] Streamlit dashboard for live + historical visualization
-- [ ] Statistical anomaly detection
 - [ ] AI-generated daily summary reports
 - [ ] MCP integration so Claude can query closet status conversationally
 - [ ] Migration from Mac dev broker to Acer production broker
 - [ ] Additional sensors (PIR motion, door reed switch, current sensor)
+
+## Why this lives in one repo
+
+The temptation with a project like this is to split it into multiple repos — one for firmware, one for the subscriber service, one for analysis. I'm deliberately keeping them together because the *story* of this project is the integration. Anyone reading this repo can follow a single physical signal — temperature in a closet — through every stage of an end-to-end data system. That narrative is more valuable to me right now than the modularity. When a piece outgrows this layout (likely the dashboard), it'll move to its own repo with proper boundaries.
 
 ## Author
 
