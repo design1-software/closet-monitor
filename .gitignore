@@ -24,3 +24,6 @@ subscriber/.env
 # Database (regenerable from logs/MQTT)
 data/*.db
 data/*.db-journal
+
+# Jupyter
+.ipynb_checkpoints/
