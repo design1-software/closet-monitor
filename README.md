@@ -1,6 +1,6 @@
 # Closet Monitor
 
-An end-to-end IoT data pipeline for monitoring my home lab network closet. An ESP32 microcontroller reads environmental conditions, publishes them over WiFi to an MQTT broker, and a Python service persists them to a local database for analysis, dashboarding, and AI-assisted insights.
+An end-to-end IoT data pipeline for monitoring my home lab network closet — and the first node in a broader smart-home observability platform built around Home Assistant.
 
 ## The story behind this project
 
@@ -8,11 +8,22 @@ This project started as a single-evening exercise: wire up a microcontroller to 
 
 So I pivoted.
 
-What was a one-night embedded project became a multi-stage pipeline spanning **embedded systems → networking → backend services → data persistence → exploratory analysis → (next) dashboarding and AI insights.** Every layer is a deliberate learning surface. The goal isn't just to monitor my closet — it's to walk a complete data lifecycle with one cohesive dataset I actually understand and care about.
+What was a one-night embedded project became a multi-stage pipeline spanning **embedded systems → networking → backend services → data persistence → exploratory analysis → dashboarding → AI insights**. Every layer is a deliberate learning surface. The goal isn't just to monitor my closet — it's to walk a complete data lifecycle with one cohesive dataset I actually understand and care about, then use it as the proving ground for a larger smart-home platform.
 
 The closet is real. My home server lives there, running a production MCP (Model Context Protocol) server and a Meta Engagement automation pipeline. A laptop running 24/7 in an enclosed space deserves observability, and now it has it.
 
-## Architecture
+## Where this is headed
+
+This repo is the foundation for a larger **smart home + home lab observability platform**:
+
+- **Home Assistant on a Raspberry Pi 5** as the central hub, ingesting data from this sensor and other smart devices
+- **Ecobee thermostat integration** via Home Assistant, with cross-correlation analysis between the wall thermostat readings and what's actually happening in the closet
+- **Three wall-mounted 10-inch tablets** as monitoring and control panels around the house, running Home Assistant's Lovelace UI
+- **Multiple sensor projects** feeding into the same data fabric over time
+
+The closet monitor proves out the pipeline pattern. Future sensor projects (door reed switches, motion sensors, current monitors) will reuse this MQTT → broker → database → dashboard architecture.
+
+## Architecture (current)
 
 ```
 ┌─────────────────┐
@@ -34,10 +45,32 @@ The closet is real. My home server lives there, running a production MCP (Model 
 │  SQLite Database │  Time-series persistence
 └────────┬─────────┘
          │
-   ┌─────┴─────┬──────────────┬──────────────┐
-   ▼           ▼              ▼              ▼
-Jupyter    Streamlit      MCP tool      AI insights
-analysis   dashboard      (planned)     (planned)
+   ┌─────┴─────┬──────────────┐
+   ▼           ▼              ▼
+Jupyter    Streamlit      MCP tool
+analysis   dashboard      (planned)
+```
+
+## Architecture (target)
+
+```
+┌─────────────────┐    ┌─────────────────┐
+│  ESP32 + BME280 │    │ Ecobee Thermostat│
+│ (closet sensor) │    │  (whole house)   │
+└────────┬────────┘    └────────┬─────────┘
+         │ MQTT                  │ Cloud API
+         ▼                       ▼
+┌─────────────────────────────────────────┐
+│  Home Assistant on Raspberry Pi 5       │
+│  + Mosquitto broker (production)        │
+│  + SQLite/Postgres for long-term data   │
+└────────┬────────────────────────────────┘
+         │
+   ┌─────┴──────┬──────────────┬──────────────┐
+   ▼            ▼              ▼              ▼
+Tablet UIs   Lovelace      Cross-source   AI insights
+(3 around    dashboards    analytics      (anomaly
+ the house)                (HA + closet)  detection)
 ```
 
 ## Hardware
@@ -61,7 +94,7 @@ analysis   dashboard      (planned)     (planned)
 - **Broker:** Eclipse Mosquitto 2.x
 - **Subscriber:** Python 3 with paho-mqtt and python-dotenv
 - **Database:** SQLite 3
-- **Analysis:** Python with pandas, matplotlib, seaborn (Jupyter notebooks)
+- **Analysis:** Python with pandas, matplotlib, seaborn, scipy (Jupyter notebooks)
 - **Toolchain:** `arduino-cli` for firmware, virtualenv for Python dependencies
 
 ## MQTT topics
@@ -72,6 +105,8 @@ analysis   dashboard      (planned)     (planned)
 | `home/closet/environment` | JSON (temp, humidity, pressure, RSSI, uptime) | Every 30s |
 | `home/closet/alerts/temperature` | JSON alert state (retained, edge-triggered) | On threshold cross |
 | `home/closet/alerts/humidity` | JSON alert state (retained, edge-triggered) | On threshold cross |
+
+The `home/` prefix and standard payload format are intentionally Home Assistant-friendly. When the platform comes online, HA will subscribe to these topics with no firmware changes required.
 
 ### Example payload
 
@@ -108,17 +143,19 @@ CREATE TABLE events (
 );
 ```
 
-## Early findings
+## Findings so far
 
 After ~16 hours of continuous operation:
 
-- **1,917 readings collected** with **zero packet loss** (every interval between 27.5s and 32.5s, target was 30s)
-- Temperature held within a tight 5.4°F band (71.8 → 77.2°F) with std dev of just 0.91°F — evidence of healthy HVAC behavior
-- Humidity averaged 46.9% with occasional brief spikes that don't correlate with temperature changes
-- WiFi signal strength held steady at -67 dBm average across the entire run
-- **Detected a brief humidity event at 05:38 AM:** humidity jumped 4.4 points in 30 seconds while temperature stayed flat, then recovered within 90 seconds. Signature suggests a brief introduction of moist air (door opening, nearby shower, or air movement) — too fast for HVAC, too localized for weather.
+- **1,917 readings collected** with **zero packet loss** (intervals ranged 27.5 - 32.5s, target 30s)
+- Temperature held within a tight 5.4°F band (71.8 → 77.2°F) with std dev of just 0.91°F
+- Humidity averaged 46.9% with one detected micro-event (4.4-point spike in 30 seconds, recovery within 90s)
+- WiFi signal strength steady at -67 dBm average
+- **15 HVAC cycles automatically detected** using rolling-mean smoothing + scipy peak detection
+- Cycle lengths split into two regimes: **short cycles (16-50 min) during evening peak hours**, **long cycles (100+ min) overnight** — consistent with healthy outside-temperature-driven HVAC behavior
+- Average temperature swing per cycle: 1.29°F (tight thermostat control)
 
-The fact that the sensor caught and recorded a 90-second event without intervention is exactly the value proposition of continuous monitoring versus point-in-time checks.
+The cycle-length pattern is the most actionable insight: the closet's environment is being driven by the rest of the house's thermal load, not just its own internal heat sources. Cross-referencing this with ecobee schedule data (next phase) should let me quantify the thermal lag between the wall thermostat and the closet itself.
 
 ## Setup
 
@@ -150,7 +187,6 @@ python subscriber.py
 
 ### Verify the pipeline
 
-In a separate terminal:
 ```bash
 mosquitto_sub -h <broker-ip> -t "home/closet/#" -v
 sqlite3 data/closet.db "SELECT COUNT(*) FROM readings;"
@@ -166,13 +202,14 @@ jupyter lab
 
 ## Design decisions
 
-- **JSON payloads** over binary — slightly more bandwidth, massively easier to debug with `mosquitto_sub -v` and to consume from any language.
+- **JSON payloads** over binary — slightly more bandwidth, massively easier to debug with `mosquitto_sub -v` and to consume from any language. Also Home Assistant-friendly out of the box.
 - **Edge-triggered alerts** — alert topics only publish when state changes, avoiding alert spam while still capturing every transition. Retained flag ensures late subscribers see current state.
 - **Last Will & Testament** — broker auto-publishes `offline` to `home/closet/status` if the ESP32 disconnects uncleanly.
 - **Non-blocking main loop** — uses `millis()` timing instead of `delay()` so the MQTT client can service keepalives and reconnections between sensor reads.
 - **Separation of concerns** — credentials live in `config.h` (firmware) and `.env` (subscriber), both gitignored. Example templates are committed.
 - **Server-side timestamps** — the subscriber records `received_at` independently of the device's `uptime_s`, so reading order is preserved even if the device reboots.
-- **SQLite over Postgres for the first iteration** — single-file database, zero ops overhead, sufficient throughput for 30s sampling. When this moves to the production server with longer retention, migration to Postgres or DuckDB becomes a discrete decision rather than premature optimization.
+- **SQLite over Postgres for the first iteration** — single-file database, zero ops overhead, sufficient throughput for 30s sampling. Migration to Postgres or DuckDB happens when data volumes or query patterns demand it.
+- **MQTT topic naming follows the Home Assistant convention** — `home/<location>/<metric>` — so the eventual HA migration is configuration-only, no firmware changes.
 
 ## Repository layout
 
@@ -188,29 +225,46 @@ closet-monitor/
 │   ├── requirements.txt               # Python dependencies
 │   └── .env.example                   # Subscriber config template
 ├── analysis/
-│   └── 01-exploratory-analysis.ipynb  # Jupyter notebook (in progress)
+│   └── 01-exploratory-analysis.ipynb  # Jupyter notebook
 └── README.md
 ```
 
 ## Roadmap
 
+### Done
 - [x] ESP32 firmware with WiFi + MQTT + BME280
 - [x] Threshold-based alerting (edge-triggered)
 - [x] Python subscriber with SQLite persistence
 - [x] Sample overnight dataset (~955 readings, 8 hours continuous)
-- [x] Initial exploratory analysis: descriptive stats, time-series plots, correlation
+- [x] Exploratory analysis: descriptive stats, time-series plots, correlation
+- [x] HVAC cycle detection with scipy peak detection
+- [x] Cycle length analysis and time-of-day pattern identification
 - [x] Detected first real-world micro-event (05:38 AM humidity spike)
-- [ ] HVAC cycle detection (programmatic identification of cooling cycles)
+
+### Next
+- [ ] Streamlit dashboard for live + historical visualization (portable demo artifact)
 - [ ] Statistical anomaly detection (rolling-window z-score)
-- [ ] Streamlit dashboard for live + historical visualization
+- [ ] Ecobee API integration: pull thermostat data into the same database
+- [ ] Cross-correlation analysis: closet temp vs. thermostat schedule and reported temp
 - [ ] AI-generated daily summary reports
-- [ ] MCP integration so Claude can query closet status conversationally
-- [ ] Migration from Mac dev broker to Acer production broker
-- [ ] Additional sensors (PIR motion, door reed switch, current sensor)
+
+### Platform
+- [ ] Migrate broker to Raspberry Pi 5 + install Home Assistant
+- [ ] Connect Home Assistant to existing MQTT topics (zero firmware changes)
+- [ ] Add ecobee integration through HA
+- [ ] Build Lovelace dashboard combining closet sensor + ecobee data
+- [ ] Deploy 3 wall-mounted tablets running HA's tablet UI
+- [ ] MCP integration so Claude can query the unified data through HA
+
+### Future sensors
+- [ ] PIR motion sensor in the closet
+- [ ] Door reed switch on the closet door
+- [ ] Current sensor on the home server's power cable
+- [ ] Additional environmental nodes in other parts of the house
 
 ## Why this lives in one repo
 
-The temptation with a project like this is to split it into multiple repos — one for firmware, one for the subscriber service, one for analysis. I'm deliberately keeping them together because the *story* of this project is the integration. Anyone reading this repo can follow a single physical signal — temperature in a closet — through every stage of an end-to-end data system. That narrative is more valuable to me right now than the modularity. When a piece outgrows this layout (likely the dashboard), it'll move to its own repo with proper boundaries.
+The temptation with a project like this is to split it into multiple repos — one for firmware, one for the subscriber service, one for analysis. I'm deliberately keeping them together because the *story* of this project is the integration. Anyone reading this repo can follow a single physical signal — temperature in a closet — through every stage of an end-to-end data system. That narrative is more valuable to me right now than the modularity. When a piece outgrows this layout (likely the dashboard, possibly the Home Assistant integration), it'll move to its own repo with proper boundaries.
 
 ## Author
 
