@@ -2,9 +2,17 @@
 
 An end-to-end IoT data pipeline for monitoring my home lab network closet — and the first node in a broader smart-home observability platform built around Home Assistant.
 
-![Live Dashboard](docs/screenshots/dashboard.png)
+![Dashboard Status](docs/screenshots/dashboard-v2-status.png)
 
-*Live Streamlit dashboard: current readings, 24-hour summary, and interactive temperature/humidity/pressure/WiFi charts. Auto-refreshes every 30 seconds.*
+*The dashboard leads with the answer: "Should I worry?" Green means all conditions are within safe operating ranges. Current readings, stability assessment, and safe-range thresholds are visible at a glance.*
+
+![Dashboard Charts](docs/screenshots/dashboard-v2-charts.png)
+
+*24-hour interactive charts for temperature, humidity, pressure, and WiFi signal. The red dashed line marks the 82°F alert threshold — visible context for how close current conditions are to triggering an alert.*
+
+![Dashboard Alerts](docs/screenshots/dashboard-v2-alerts.png)
+
+*Incident log with color-coded severity badges and recommended actions for each event. System health metrics at the bottom answer "can I trust this data?" — sensor uptime, dropout count, average interval, total readings stored.*
 
 ## The story behind this project
 
@@ -12,9 +20,22 @@ This project started as a single-evening exercise: wire up a microcontroller to 
 
 So I pivoted.
 
-What was a one-night embedded project became a multi-stage pipeline spanning **embedded systems → networking → backend services → data persistence → exploratory analysis → dashboarding → AI insights**. Every layer is a deliberate learning surface. The goal isn't just to monitor my closet — it's to walk a complete data lifecycle with one cohesive dataset I actually understand and care about, then use it as the proving ground for a larger smart-home platform.
+What was a one-night embedded project became a multi-stage pipeline spanning **embedded systems → networking → backend services → data persistence → exploratory analysis → dashboarding → alerting**. Every layer is a deliberate learning surface. The goal isn't just to monitor my closet — it's to walk a complete data lifecycle with one cohesive dataset I actually understand and care about, then use it as the proving ground for a larger smart-home platform.
 
 The closet is real. My home server lives there, running a production MCP (Model Context Protocol) server and a Meta Engagement automation pipeline. A laptop running 24/7 in an enclosed space deserves observability, and now it has it.
+
+## What this project answers
+
+Every dashboard, alert, and analysis in this project exists to answer a specific question — the same way production monitoring serves stakeholders in a corporate environment.
+
+| Question | Who asks it | How it's answered |
+|---|---|---|
+| "Is my server environment safe right now?" | Server operator | Dashboard: green/red status banner with plain-English assessment |
+| "Has anything happened that requires attention?" | Server operator | Alert listener: macOS notifications with action runbooks + incident log |
+| "How efficiently is my HVAC cycling?" | Homeowner | Analysis: cycle frequency, duration, time-of-day patterns |
+| "Is the environment stable or volatile?" | Both | Dashboard: stability labels (Stable/Moderate/Volatile) based on 24h swing |
+| "What external factors affect my server environment?" | Analyst | Analysis: door events, human presence, time-of-day correlation |
+| "Can I trust this monitoring data?" | System operator | Dashboard: sensor uptime, dropout count, average interval |
 
 ## Where this is headed
 
@@ -40,13 +61,15 @@ The closet monitor proves out the pipeline pattern. Future sensor projects (door
 └────────┬────────┘
          │ subscribe
          ▼
-┌──────────────────┐
-│ Python Subscriber│  paho-mqtt → SQLite
-└────────┬─────────┘
+┌──────────────────┐    ┌──────────────────┐
+│ Python Subscriber│    │  Alert Listener  │
+│ paho-mqtt→SQLite │    │ notifications +  │
+│                  │    │ runbook actions   │
+└────────┬─────────┘    └──────────────────┘
          │
          ▼
 ┌──────────────────┐
-│  SQLite Database │  Time-series persistence
+│  SQLite Database │  readings + events + alerts
 └────────┬─────────┘
          │
    ┌─────┴─────┬──────────────┐
@@ -82,6 +105,7 @@ Tablet UIs   Lovelace      Cross-source   AI insights
 - **ESP32-WROOM-32** (Teyleten 38-pin, USB-C) — dual-core 240 MHz microcontroller with WiFi + Bluetooth
 - **BME280 sensor** (SHILLEHTEK pre-soldered, 3.3V, I²C at 0x76) — temperature, humidity, pressure
 - **4 female-to-female Dupont jumper wires** — direct ESP32-to-sensor connection (no breadboard)
+- **3D-printable enclosure** — two-piece design (ESP32 cradle + remote sensor pod), STL files in `case-design/`
 
 ### Wiring
 
@@ -97,9 +121,10 @@ Tablet UIs   Lovelace      Cross-source   AI insights
 - **Firmware:** Arduino C++ using PubSubClient (MQTT) and Adafruit BME280 libraries
 - **Broker:** Eclipse Mosquitto 2.x
 - **Subscriber:** Python 3 with paho-mqtt and python-dotenv
-- **Database:** SQLite 3
+- **Alert Listener:** Python 3 with macOS native notifications, action runbooks, SQLite logging
+- **Database:** SQLite 3 (readings, events, and alerts tables)
 - **Analysis:** Python with pandas, matplotlib, seaborn, scipy (Jupyter notebooks)
-- **Dashboard:** Streamlit + Plotly
+- **Dashboard:** Streamlit + Plotly, framed around stakeholder questions
 - **Toolchain:** `arduino-cli` for firmware, virtualenv for Python dependencies
 
 ## MQTT topics
@@ -146,33 +171,44 @@ CREATE TABLE events (
     topic       TEXT NOT NULL,
     payload     TEXT NOT NULL
 );
+
+CREATE TABLE alerts (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    received_at TEXT NOT NULL,
+    severity    TEXT NOT NULL,
+    event_type  TEXT NOT NULL,
+    topic       TEXT NOT NULL,
+    payload     TEXT NOT NULL,
+    action      TEXT
+);
 ```
 
 ## Findings so far
 
-After ~36 hours of continuous operation:
+After ~48 hours of continuous operation and 5,600+ readings:
 
-- **2,000+ readings collected** with **zero packet loss** (intervals ranged 27.5 - 32.5s, target 30s)
-- Temperature held within a tight 5.4°F band (71.8 → 77.2°F) with std dev of just 0.91°F
-- Humidity averaged 46.9% with one detected micro-event (4.4-point spike in 30 seconds, recovery within 90s)
-- WiFi signal strength steady at -67 dBm average
+- **Zero packet loss** over the full run (intervals ranged 27.5–32.5s, target 30s)
+- Temperature held within a tight 5.4°F band with std dev of just 0.91°F — evidence of healthy HVAC behavior
 - **15 HVAC cycles automatically detected** using rolling-mean smoothing + scipy peak detection
-- Cycle lengths split into two distinct regimes: **short cycles (16-50 min) during evening peak hours**, **long cycles (100+ min) overnight** — consistent with healthy outside-temperature-driven HVAC behavior
+- Cycle lengths split into two distinct regimes: **short cycles (16–50 min) during evening peak hours**, **long cycles (100+ min) overnight** — consistent with healthy outside-temperature-driven HVAC behavior
 - Average temperature swing per cycle: 1.29°F (tight thermostat control)
+- **Rate-of-change anomaly detection** identified 31 rapid temperature events and 67 rapid humidity events using a rolling z-score method
+- Detected a **door-closing event at approximately 1:40 AM** from its thermal signature: sudden temperature rise (+1.68°F over 3 minutes) with simultaneous humidity drop, consistent with sealing a warmer, drier room
+- Multiple brief humidity spike events (z>10) correlated with human presence and activity in the bedroom
 
-The cycle-length pattern is the most actionable insight: the closet's environment is being driven by the rest of the house's thermal load, not just its own internal heat sources. Cross-referencing this with ecobee schedule data (next phase) should let me quantify the thermal lag between the wall thermostat and the closet itself.
+## Alert system
 
-### HVAC cycle detection
+Every alert includes three things: **what happened, why it matters, and what to do about it.**
 
-![HVAC Cycles Detected](docs/screenshots/hvac-cycles.png)
+| Alert | Severity | Action |
+|---|---|---|
+| Temp > 82°F | CRITICAL | Check if AC is running. If yes, investigate airflow blockage. If no, check thermostat. |
+| Temp < 60°F | WARNING | Check if heating is running. Possible HVAC failure. |
+| Humidity > 65% | CRITICAL | Check for water intrusion or AC drain issue. Inspect equipment for condensation. |
+| Humidity < 25% | WARNING | Consider humidifier. Avoid touching components without grounding. |
+| Sensor offline > 5 min | WARNING | Check USB power to ESP32. Check WiFi. Press EN button to reset. |
 
-*Smoothed temperature signal with peaks (red ▼ = AC kick-on) and troughs (blue ▲ = AC turn-off) automatically detected via scipy peak-finding. 15 cycles identified across the observation window, with cycle lengths varying from 16 to 177 minutes depending on time of day.*
-
-### Time-series view
-
-![Temperature and Humidity Over Time](docs/screenshots/time-series.png)
-
-*Raw temperature (red) and humidity (blue) over the same window, dual-axis. The relationship is weakly correlated overall, but a clear inflection appears around 03:00 where humidity climbs as temperature drops — a signature of cooler conditioned air entering the space.*
+Alerts are delivered via macOS desktop notifications and logged to both a flat file (`alerts.log`) and the SQLite `alerts` table for dashboard display and historical analysis.
 
 ## Setup
 
@@ -191,7 +227,7 @@ The cycle-length pattern is the most actionable insight: the closet's environmen
    arduino-cli upload -p /dev/cu.usbserial-0001 --fqbn esp32:esp32:esp32 .
    ```
 
-### Subscriber
+### Subscriber + Alert Listener
 
 ```bash
 cd subscriber
@@ -199,14 +235,21 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env       # edit with your broker IP
+
+# Terminal 1: data subscriber
 python subscriber.py
+
+# Terminal 2: alert listener
+python alert_listener.py
 ```
 
-### Verify the pipeline
+### Dashboard
 
 ```bash
-mosquitto_sub -h <broker-ip> -t "home/closet/#" -v
-sqlite3 data/closet.db "SELECT COUNT(*) FROM readings;"
+cd subscriber && source venv/bin/activate
+cd ../dashboard
+streamlit run dashboard.py
+# Opens at http://localhost:8501
 ```
 
 ### Analysis
@@ -214,15 +257,13 @@ sqlite3 data/closet.db "SELECT COUNT(*) FROM readings;"
 ```bash
 cd analysis
 jupyter lab
-# Open 01-exploratory-analysis.ipynb
 ```
 
-### Dashboard
+### Verify the pipeline
 
 ```bash
-cd dashboard
-streamlit run dashboard.py
-# Opens automatically at http://localhost:8501
+mosquitto_sub -h <broker-ip> -t "home/closet/#" -v
+sqlite3 data/closet.db "SELECT COUNT(*) FROM readings;"
 ```
 
 ## Design decisions
@@ -233,6 +274,8 @@ streamlit run dashboard.py
 - **Non-blocking main loop** — uses `millis()` timing instead of `delay()` so the MQTT client can service keepalives and reconnections between sensor reads.
 - **Separation of concerns** — credentials live in `config.h` (firmware) and `.env` (subscriber), both gitignored. Example templates are committed.
 - **Server-side timestamps** — the subscriber records `received_at` independently of the device's `uptime_s`, so reading order is preserved even if the device reboots.
+- **Runbook-based alerting** — every alert includes a recommended action, not just a notification. This mirrors how production incident management systems (PagerDuty, OpsGenie) operate.
+- **Dashboard framed around questions, not metrics** — each section answers a specific stakeholder question ("Should I worry?", "What's the trend?", "Has anything happened?", "Can I trust this data?"). This is how business intelligence dashboards are designed in corporate environments.
 - **SQLite over Postgres for the first iteration** — single-file database, zero ops overhead, sufficient throughput for 30s sampling. Migration to Postgres or DuckDB happens when data volumes or query patterns demand it.
 - **MQTT topic naming follows the Home Assistant convention** — `home/<location>/<metric>` — so the eventual HA migration is configuration-only, no firmware changes.
 
@@ -242,17 +285,24 @@ streamlit run dashboard.py
 closet-monitor/
 ├── closet-monitor.ino                 # ESP32 firmware
 ├── config.example.h                   # Firmware config template
+├── case-design/
+│   ├── esp32_case.scad                # OpenSCAD source (ESP32 enclosure)
+│   ├── esp32_case.stl                 # Print-ready STL
+│   ├── sensor_pod.scad                # OpenSCAD source (BME280 pod)
+│   ├── sensor_pod.stl                 # Print-ready STL
+│   └── PRINT_SPEC.md                 # Print settings and service recommendations
 ├── data/
-│   ├── sample-overnight-*.log         # Sample dataset for reference
+│   ├── sample-overnight-*.log         # Sample dataset
 │   └── closet.db                      # Live SQLite database (gitignored)
 ├── subscriber/
-│   ├── subscriber.py                  # Python MQTT → SQLite service
+│   ├── subscriber.py                  # MQTT → SQLite service
+│   ├── alert_listener.py             # Alert notifications + runbook actions
 │   ├── requirements.txt               # Python dependencies
-│   └── .env.example                   # Subscriber config template
+│   └── .env.example                   # Config template
 ├── analysis/
 │   └── 01-exploratory-analysis.ipynb  # Jupyter notebook
 ├── dashboard/
-│   └── dashboard.py                   # Streamlit live dashboard
+│   └── dashboard.py                   # Streamlit operations dashboard
 ├── docs/
 │   └── screenshots/                   # README assets
 └── README.md
@@ -268,18 +318,21 @@ closet-monitor/
 - [x] Exploratory analysis: descriptive stats, time-series plots, correlation
 - [x] HVAC cycle detection with scipy peak detection
 - [x] Cycle length analysis and time-of-day pattern identification
-- [x] Detected first real-world micro-event (05:38 AM humidity spike)
-- [x] Streamlit dashboard with live + 24-hour view
+- [x] Rate-of-change anomaly detection with rolling z-score
+- [x] Detected real-world events from sensor signatures (door closing, human presence)
+- [x] Streamlit dashboard framed around stakeholder questions
+- [x] Alert listener with macOS notifications and action runbooks
+- [x] 3D-printable case design (ESP32 enclosure + sensor pod)
 
 ### Next
-- [ ] Statistical anomaly detection (rolling-window z-score)
-- [ ] Ecobee API integration: pull thermostat data into the same database
-- [ ] Cross-correlation analysis: closet temp vs. thermostat schedule and reported temp
+- [ ] Ecobee integration via Home Assistant HomeKit Controller
+- [ ] Cross-correlation analysis: closet temp vs. thermostat schedule
 - [ ] AI-generated daily summary reports
+- [ ] Migrate broker + services to production server (Acer)
 
 ### Platform
-- [ ] Migrate broker to Raspberry Pi 5 + install Home Assistant
-- [ ] Connect Home Assistant to existing MQTT topics (zero firmware changes)
+- [ ] Install Home Assistant on Raspberry Pi 5
+- [ ] Connect HA to existing MQTT topics (zero firmware changes)
 - [ ] Add ecobee integration through HA
 - [ ] Build Lovelace dashboard combining closet sensor + ecobee data
 - [ ] Deploy 3 wall-mounted tablets running HA's tablet UI
