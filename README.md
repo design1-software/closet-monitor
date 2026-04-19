@@ -348,6 +348,10 @@ closet-monitor/
 
 The temptation with a project like this is to split it into multiple repos — one for firmware, one for the subscriber service, one for analysis. I'm deliberately keeping them together because the *story* of this project is the integration. Anyone reading this repo can follow a single physical signal — temperature in a closet — through every stage of an end-to-end data system. That narrative is more valuable to me right now than the modularity. When a piece outgrows this layout (likely the Home Assistant integration), it'll move to its own repo with proper boundaries.
 
+Related Infrastructure
+This sensor is one node in a broader home lab network documented at git-init-home-lab.
+The ESP32 currently connects via the Gorgeous SSID (VLAN 20, TRUSTED) and publishes MQTT to a Mosquitto broker on the MacBook Pro. When Mosquitto migrates to the Raspberry Pi 4B (192.168.10.16, VLAN 10, SERVER), the ESP32 will move to the Gorgeous-Auto SSID (VLAN 31, IOT-AUTO) — a dedicated automation VLAN that permits only MQTT and DNS traffic to the Pi via Cisco ACLs.
+
 ## Author
 
 Julius Moore — part of a broader home lab build, developed alongside coursework for B.S. Software Engineering at WGU.
