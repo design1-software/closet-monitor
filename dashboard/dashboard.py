@@ -262,7 +262,7 @@ fig.update_layout(
     margin=dict(l=10, r=10, t=10, b=10),
 )
 
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 # Pressure & WiFi side by side
 chart_col1, chart_col2 = st.columns(2)
@@ -284,7 +284,7 @@ with chart_col1:
         yaxis_title="hPa",
         showlegend=False,
     )
-    st.plotly_chart(pfig, use_container_width=True)
+    st.plotly_chart(pfig, width="stretch")
 
 with chart_col2:
     st.subheader("WiFi Signal Strength")
@@ -303,7 +303,7 @@ with chart_col2:
         yaxis_title="dBm",
         showlegend=False,
     )
-    st.plotly_chart(wfig, use_container_width=True)
+    st.plotly_chart(wfig, width="stretch")
 
 # ================================================================
 # SECTION 4: "Has anything happened that required attention?"
@@ -330,7 +330,7 @@ else:
 
     st.dataframe(
         display_df,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
