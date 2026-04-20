@@ -59,6 +59,7 @@
  
      // Last Will & Testament: broker publishes "offline" if we disconnect uncleanly
      if (mqtt.connect(MQTT_CLIENT_ID,
+                      MQTT_USER, MQTT_PASSWORD,
                       "home/closet/status", 1, true, "offline")) {
        Serial.println("connected.");
        mqtt.publish("home/closet/status", "online", true);

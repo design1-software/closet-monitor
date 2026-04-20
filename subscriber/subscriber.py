@@ -164,6 +164,10 @@ def main():
     signal.signal(signal.SIGTERM, shutdown)
 
     log.info(f"Connecting to {MQTT_HOST}:{MQTT_PORT}...")
+    mqtt_user = os.getenv("MQTT_USER")
+    mqtt_pass = os.getenv("MQTT_PASSWORD")
+    if mqtt_user:
+        client.username_pw_set(mqtt_user, mqtt_pass)
     client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
     client.loop_forever()
 
