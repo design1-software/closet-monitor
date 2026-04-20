@@ -54,12 +54,12 @@ The closet monitor proves out the pipeline pattern. Future sensor projects (door
 ┌─────────────────┐
 │  ESP32 + BME280 │  Edge device — embedded C++
 └────────┬────────┘
-         │ WiFi · MQTT
+         │ WiFi · MQTT (authenticated)
          ▼
 ┌─────────────────┐
-│ Mosquitto Broker│  Message broker
+│ Mosquitto Broker│  Message broker (auth + topic ACLs)
 └────────┬────────┘
-         │ subscribe
+         │ subscribe (authenticated)
          ▼
 ┌──────────────────┐    ┌──────────────────┐
 │ Python Subscriber│    │  Alert Listener  │
@@ -85,11 +85,11 @@ analysis   dashboard      (planned)
 │  ESP32 + BME280 │    │ Ecobee Thermostat│
 │ (closet sensor) │    │  (whole house)   │
 └────────┬────────┘    └────────┬─────────┘
-         │ MQTT                  │ Cloud API
+         │ MQTT (TLS)            │ Cloud API
          ▼                       ▼
 ┌─────────────────────────────────────────┐
 │  Home Assistant on Raspberry Pi 5       │
-│  + Mosquitto broker (production)        │
+│  + Mosquitto broker (production, TLS)   │
 │  + SQLite/Postgres for long-term data   │
 └────────┬────────────────────────────────┘
          │
@@ -119,7 +119,7 @@ Tablet UIs   Lovelace      Cross-source   AI insights
 ## Software stack
 
 - **Firmware:** Arduino C++ using PubSubClient (MQTT) and Adafruit BME280 libraries
-- **Broker:** Eclipse Mosquitto 2.x
+- **Broker:** Eclipse Mosquitto 2.x with authentication and topic-level ACLs
 - **Subscriber:** Python 3 with paho-mqtt and python-dotenv
 - **Alert Listener:** Python 3 with macOS native notifications, action runbooks, SQLite logging
 - **Database:** SQLite 3 (readings, events, and alerts tables)
@@ -210,11 +210,61 @@ Every alert includes three things: **what happened, why it matters, and what to 
 
 Alerts are delivered via macOS desktop notifications and logged to both a flat file (`alerts.log`) and the SQLite `alerts` table for dashboard display and historical analysis.
 
+## Security
+
+Defense-in-depth approach: network-layer isolation via Cisco ACLs **plus** application-layer authentication and authorization via Mosquitto.
+
+### Network layer (Cisco ACLs)
+
+The ESP32 sensor will operate on **VLAN 31 (IOT-AUTO)** once the MQTT broker migrates to the Raspberry Pi. The IOT-AUTO ACL restricts traffic to:
+
+- **DNS (UDP/TCP 53)** to Pi-hole only (192.168.10.16)
+- **MQTT (TCP 1883, 8883)** to the Pi only (192.168.10.16)
+- **All other traffic denied** — no internet, no access to server VLAN, no lateral movement
+
+A compromised ESP32 on IOT-AUTO can only reach the MQTT broker and DNS. It cannot scan the network, access the server, or phone home to an external endpoint.
+
+### Application layer (Mosquitto auth + ACLs)
+
+MQTT connections require username/password authentication. Anonymous access is denied.
+
+| User | Purpose | Permissions |
+|---|---|---|
+| `closet-sensor` | ESP32 device identity | **Write only** to `home/closet/environment`, `home/closet/status`, `home/closet/alerts/*` |
+| `closet-subscriber` | Python services (subscriber + alert listener) | **Read only** on `home/closet/#`, write to `home/closet/status` (for testing) |
+
+**What this prevents:**
+
+| Attack | Without auth | With auth + ACLs |
+|---|---|---|
+| Rogue device publishes fake "everything is fine" readings | ✅ Possible — anyone on the network can publish | ❌ Blocked — must authenticate, and only `closet-sensor` can write to environment topic |
+| Rogue device publishes fake alerts (false CRITICAL notifications) | ✅ Possible | ❌ Blocked — only `closet-sensor` can write to alert topics |
+| Rogue device subscribes and eavesdrops on sensor data | ✅ Possible | ❌ Blocked — must authenticate as `closet-subscriber` |
+| Compromised subscriber publishes fake readings | ✅ Possible | ❌ Blocked — `closet-subscriber` has read-only access to environment topic |
+| Compromised IoT device on VLAN 31 scans the network | ❌ Already blocked by Cisco ACL | ❌ Blocked at network layer before reaching MQTT |
+
+### Credential management
+
+- ESP32 credentials are in `config.h` (gitignored, never committed)
+- Python credentials are in `.env` (gitignored, never committed)
+- Template files (`config.example.h`, `.env.example`) are committed with placeholder values
+- Mosquitto password file uses hashed passwords (not plaintext)
+
+### Encryption roadmap
+
+Currently MQTT traffic is unencrypted (plain TCP on port 1883). When the broker migrates to the Raspberry Pi, TLS will be added:
+
+- Mosquitto configured for MQTT over TLS on port 8883
+- ESP32 firmware updated to use `WiFiClientSecure` with certificate pinning
+- The IOT-AUTO ACL already permits port 8883 in anticipation of this migration
+
+This will complete the security stack: **network isolation (VLAN + ACL) → authentication (username/password) → authorization (topic ACLs) → encryption (TLS).**
+
 ## Setup
 
 ### Firmware
 
-1. Copy `config.example.h` to `config.h` and fill in WiFi credentials and MQTT broker IP
+1. Copy `config.example.h` to `config.h` and fill in WiFi credentials, MQTT broker IP, and MQTT credentials
 2. Install toolchain:
    ```bash
    brew install arduino-cli mosquitto
@@ -227,6 +277,22 @@ Alerts are delivered via macOS desktop notifications and logged to both a flat f
    arduino-cli upload -p /dev/cu.usbserial-0001 --fqbn esp32:esp32:esp32 .
    ```
 
+### Mosquitto broker
+
+```bash
+brew install mosquitto
+# Create password file with device and subscriber users
+mosquitto_passwd -c /opt/homebrew/etc/mosquitto/passwordfile closet-sensor
+mosquitto_passwd /opt/homebrew/etc/mosquitto/passwordfile closet-subscriber
+# Copy aclfile to /opt/homebrew/etc/mosquitto/aclfile
+# Configure mosquitto.conf:
+#   listener 1883 0.0.0.0
+#   allow_anonymous false
+#   password_file /opt/homebrew/etc/mosquitto/passwordfile
+#   acl_file /opt/homebrew/etc/mosquitto/aclfile
+brew services start mosquitto
+```
+
 ### Subscriber + Alert Listener
 
 ```bash
@@ -234,7 +300,7 @@ cd subscriber
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env       # edit with your broker IP
+cp .env.example .env       # edit with your broker IP and MQTT credentials
 
 # Terminal 1: data subscriber
 python subscriber.py
@@ -262,7 +328,8 @@ jupyter lab
 ### Verify the pipeline
 
 ```bash
-mosquitto_sub -h <broker-ip> -t "home/closet/#" -v
+# Authenticated subscribe (replace credentials)
+mosquitto_sub -h <broker-ip> -u closet-subscriber -P '<password>' -t "home/closet/#" -v
 sqlite3 data/closet.db "SELECT COUNT(*) FROM readings;"
 ```
 
@@ -276,6 +343,7 @@ sqlite3 data/closet.db "SELECT COUNT(*) FROM readings;"
 - **Server-side timestamps** — the subscriber records `received_at` independently of the device's `uptime_s`, so reading order is preserved even if the device reboots.
 - **Runbook-based alerting** — every alert includes a recommended action, not just a notification. This mirrors how production incident management systems (PagerDuty, OpsGenie) operate.
 - **Dashboard framed around questions, not metrics** — each section answers a specific stakeholder question ("Should I worry?", "What's the trend?", "Has anything happened?", "Can I trust this data?"). This is how business intelligence dashboards are designed in corporate environments.
+- **Defense-in-depth security** — MQTT authentication and topic-level ACLs at the application layer, combined with VLAN isolation and Cisco ACLs at the network layer. Neither layer alone is sufficient; together they prevent both network-level and application-level attacks.
 - **SQLite over Postgres for the first iteration** — single-file database, zero ops overhead, sufficient throughput for 30s sampling. Migration to Postgres or DuckDB happens when data volumes or query patterns demand it.
 - **MQTT topic naming follows the Home Assistant convention** — `home/<location>/<metric>` — so the eventual HA migration is configuration-only, no firmware changes.
 
@@ -295,12 +363,13 @@ closet-monitor/
 │   ├── sample-overnight-*.log         # Sample dataset
 │   └── closet.db                      # Live SQLite database (gitignored)
 ├── subscriber/
-│   ├── subscriber.py                  # MQTT → SQLite service
-│   ├── alert_listener.py             # Alert notifications + runbook actions
+│   ├── subscriber.py                  # MQTT → SQLite service (authenticated)
+│   ├── alert_listener.py             # Alert notifications + runbook actions (authenticated)
 │   ├── requirements.txt               # Python dependencies
-│   └── .env.example                   # Config template
+│   └── .env.example                   # Config template (includes MQTT credentials)
 ├── analysis/
-│   └── 01-exploratory-analysis.ipynb  # Jupyter notebook
+│   ├── 01-exploratory-analysis.ipynb  # Exploratory data analysis + HVAC cycle detection
+│   └── 02-anomaly-detection.ipynb     # Rate-of-change anomaly detection
 ├── dashboard/
 │   └── dashboard.py                   # Streamlit operations dashboard
 ├── docs/
@@ -323,8 +392,11 @@ closet-monitor/
 - [x] Streamlit dashboard framed around stakeholder questions
 - [x] Alert listener with macOS notifications and action runbooks
 - [x] 3D-printable case design (ESP32 enclosure + sensor pod)
+- [x] MQTT authentication (per-device username/password)
+- [x] MQTT topic-level ACLs (write-only sensor, read-only subscriber)
 
 ### Next
+- [ ] TLS encryption for MQTT (port 8883) during Pi migration
 - [ ] Ecobee integration via Home Assistant HomeKit Controller
 - [ ] Cross-correlation analysis: closet temp vs. thermostat schedule
 - [ ] AI-generated daily summary reports
@@ -348,8 +420,10 @@ closet-monitor/
 
 The temptation with a project like this is to split it into multiple repos — one for firmware, one for the subscriber service, one for analysis. I'm deliberately keeping them together because the *story* of this project is the integration. Anyone reading this repo can follow a single physical signal — temperature in a closet — through every stage of an end-to-end data system. That narrative is more valuable to me right now than the modularity. When a piece outgrows this layout (likely the Home Assistant integration), it'll move to its own repo with proper boundaries.
 
-Related Infrastructure
-This sensor is one node in a broader home lab network documented at git-init-home-lab.
+## Related infrastructure
+
+This sensor is one node in a broader home lab network documented at [git-init-home-lab](https://github.com/design1-software/git-init-home-lab).
+
 The ESP32 currently connects via the Gorgeous SSID (VLAN 20, TRUSTED) and publishes MQTT to a Mosquitto broker on the MacBook Pro. When Mosquitto migrates to the Raspberry Pi 4B (192.168.10.16, VLAN 10, SERVER), the ESP32 will move to the Gorgeous-Auto SSID (VLAN 31, IOT-AUTO) — a dedicated automation VLAN that permits only MQTT and DNS traffic to the Pi via Cisco ACLs.
 
 ## Author
