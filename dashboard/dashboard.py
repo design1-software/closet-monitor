@@ -102,7 +102,9 @@ if df.empty:
 
 latest = df.iloc[-1]
 last_seen = df.index[-1]
-seconds_ago = (datetime.now(timezone.utc).astimezone(last_seen.tz) - last_seen).total_seconds()
+now_utc = datetime.now(timezone.utc)
+last_seen_utc = last_seen.tz_convert("UTC")
+seconds_ago = (now_utc - last_seen_utc).total_seconds()
 
 # Determine overall status
 issues = []
