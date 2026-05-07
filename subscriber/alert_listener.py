@@ -19,7 +19,6 @@ import logging
 import os
 import signal
 import sqlite3
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +33,8 @@ MQTT_HOST = os.getenv("MQTT_HOST", "localhost")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 DB_PATH = Path(os.getenv("DB_PATH", "../data/closet.db")).resolve()
 ALERT_LOG = Path(os.getenv("ALERT_LOG", "../data/alerts.log")).resolve()
+NTFY_URL = os.getenv("NTFY_URL", "https://ntfy.sh")
+NTFY_TOPIC = os.getenv("NTFY_TOPIC", "")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -74,17 +75,40 @@ RUNBOOKS = {
 }
 
 
-# ----- macOS Desktop Notification -----
-def notify_macos(title: str, message: str, sound: str = "Ping"):
-    """Send a native macOS notification banner."""
+_NTFY_PRIORITY = {"CRITICAL": "urgent", "WARNING": "high", "RESOLVED": "default", "INFO": "default"}
+
+
+def notify_windows(title: str, message: str) -> None:
+    """Send a Windows toast notification."""
     try:
-        subprocess.run([
-            "osascript", "-e",
-            f'display notification "{message}" with title "{title}" sound name "{sound}"'
-        ], check=True, timeout=5)
-        log.info(f"Desktop notification sent: {title}")
+        from winotify import Notification
+        toast = Notification(app_id="Closet Monitor", title=title, msg=message, duration="long")
+        toast.show()
+        log.info(f"Windows notification sent: {title}")
     except Exception as e:
-        log.warning(f"Failed to send desktop notification: {e}")
+        log.warning(f"Failed to send Windows notification: {e}")
+
+
+def notify_ntfy(title: str, message: str, severity: str = "INFO") -> None:
+    """Send a push notification via ntfy."""
+    if not NTFY_TOPIC:
+        return
+    try:
+        import requests
+        requests.post(
+            f"{NTFY_URL}/{NTFY_TOPIC}",
+            data=message.encode("utf-8"),
+            headers={"Title": title, "Priority": _NTFY_PRIORITY.get(severity, "default")},
+            timeout=5,
+        )
+        log.info(f"ntfy notification sent: {title}")
+    except Exception as e:
+        log.warning(f"Failed to send ntfy notification: {e}")
+
+
+def send_notification(title: str, message: str, severity: str = "INFO") -> None:
+    notify_windows(title, message)
+    notify_ntfy(title, message, severity)
 
 
 # ----- Alert Log File -----
@@ -168,7 +192,7 @@ def process_threshold_alert(conn, topic, payload_str):
                 severity = "WARNING"
                 event_type = "temp_unknown"
 
-            notify_macos(runbook["title"], f"Current: {temp}°F\n{runbook['message']}")
+            send_notification(runbook["title"], f"Current: {temp}°F\n{runbook['message']}", severity)
             log_to_file(severity, event_type, f"temp={temp}°F threshold_high={high} threshold_low={low}")
             insert_alert(conn, severity, event_type, topic, payload_str, runbook["message"])
         else:
@@ -195,7 +219,7 @@ def process_threshold_alert(conn, topic, payload_str):
                 severity = "WARNING"
                 event_type = "humidity_unknown"
 
-            notify_macos(runbook["title"], f"Current: {hum}%\n{runbook['message']}")
+            send_notification(runbook["title"], f"Current: {hum}%\n{runbook['message']}", severity)
             log_to_file(severity, event_type, f"humidity={hum}% threshold_high={high} threshold_low={low}")
             insert_alert(conn, severity, event_type, topic, payload_str, runbook["message"])
         else:
@@ -213,7 +237,7 @@ def process_status(conn, payload_str):
         if offline_since:
             offline_duration = (now - offline_since).total_seconds()
             runbook = RUNBOOKS["sensor_online"]
-            notify_macos(runbook["title"], f"Was offline for {int(offline_duration)}s.\n{runbook['message']}")
+            send_notification(runbook["title"], f"Was offline for {int(offline_duration)}s.\n{runbook['message']}", "RESOLVED")
             log_to_file("RESOLVED", "sensor_online", f"Back online after {int(offline_duration)}s")
             insert_alert(conn, "RESOLVED", "sensor_online", "home/closet/status", payload_str,
                          f"Sensor recovered after {int(offline_duration)}s offline")
@@ -233,7 +257,7 @@ def process_status(conn, payload_str):
 
         # Delayed notification — only notify if still offline after 5 minutes
         # (For now, log immediately. The 5-min delay would need async/threading.)
-        notify_macos(RUNBOOKS["sensor_offline"]["title"], RUNBOOKS["sensor_offline"]["message"])
+        send_notification(RUNBOOKS["sensor_offline"]["title"], RUNBOOKS["sensor_offline"]["message"], "WARNING")
 
 
 # ----- MQTT Callbacks -----
