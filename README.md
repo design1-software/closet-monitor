@@ -52,19 +52,20 @@ The closet monitor proves out the pipeline pattern. Future sensor projects (door
 
 ```
 ┌─────────────────┐
-│  ESP32 + BME280 │  Edge device — embedded C++
+│  ESP32 + BME280 │  Edge device — embedded C++ (VLAN 31, IOT-AUTO)
 └────────┬────────┘
          │ WiFi · MQTT (authenticated)
          ▼
-┌─────────────────┐
-│ Mosquitto Broker│  Message broker (auth + topic ACLs)
-└────────┬────────┘
+┌──────────────────────────────┐
+│ Mosquitto Broker             │  Raspberry Pi · 192.168.10.16
+│ VLAN 10 (SERVER)             │  Auth + topic ACLs
+└────────┬─────────────────────┘
          │ subscribe (authenticated)
          ▼
 ┌──────────────────┐    ┌──────────────────┐
-│ Python Subscriber│    │  Alert Listener  │
-│ paho-mqtt→SQLite │    │ notifications +  │
-│                  │    │ runbook actions   │
+│ Python Subscriber│    │  Alert Listener  │  Acer · 192.168.10.11
+│ paho-mqtt→SQLite │    │ winotify + ntfy  │  VLAN 10 (SERVER)
+│                  │    │ runbook actions  │
 └────────┬─────────┘    └──────────────────┘
          │
          ▼
@@ -76,6 +77,7 @@ The closet monitor proves out the pipeline pattern. Future sensor projects (door
    ▼           ▼              ▼
 Jupyter    Streamlit      MCP tool
 analysis   dashboard      (planned)
+           :8501
 ```
 
 ## Architecture (target)
@@ -119,13 +121,14 @@ Tablet UIs   Lovelace      Cross-source   AI insights
 ## Software stack
 
 - **Firmware:** Arduino C++ using PubSubClient (MQTT) and Adafruit BME280 libraries
-- **Broker:** Eclipse Mosquitto 2.x with authentication and topic-level ACLs
-- **Subscriber:** Python 3 with paho-mqtt and python-dotenv
-- **Alert Listener:** Python 3 with macOS native notifications, action runbooks, SQLite logging
+- **Broker:** Eclipse Mosquitto 2.x on Raspberry Pi (192.168.10.16) with authentication and topic-level ACLs
+- **Subscriber:** Python 3 with paho-mqtt and python-dotenv, running on Acer (192.168.10.11)
+- **Alert Listener:** Python 3 with winotify (Windows toast) + ntfy (push notifications), action runbooks, SQLite logging
 - **Database:** SQLite 3 (readings, events, and alerts tables)
 - **Analysis:** Python with pandas, matplotlib, seaborn, scipy (Jupyter notebooks)
-- **Dashboard:** Streamlit + Plotly, framed around stakeholder questions
+- **Dashboard:** Streamlit + Plotly, accessible at http://192.168.10.11:8501
 - **Toolchain:** `arduino-cli` for firmware, virtualenv for Python dependencies
+- **Service management:** Windows Scheduled Task (`ClosetMonitorServices`) via `start-services.ps1`
 
 ## MQTT topics
 
@@ -208,7 +211,7 @@ Every alert includes three things: **what happened, why it matters, and what to 
 | Humidity < 25% | WARNING | Consider humidifier. Avoid touching components without grounding. |
 | Sensor offline > 5 min | WARNING | Check USB power to ESP32. Check WiFi. Press EN button to reset. |
 
-Alerts are delivered via macOS desktop notifications and logged to both a flat file (`alerts.log`) and the SQLite `alerts` table for dashboard display and historical analysis.
+Alerts are delivered via Windows toast notifications (winotify) and ntfy push notifications to mobile, and logged to both a flat file (`alerts.log`) and the SQLite `alerts` table for dashboard display and historical analysis. Configure `NTFY_TOPIC` in `.env` to enable push delivery.
 
 ## Security
 
@@ -216,7 +219,7 @@ Defense-in-depth approach: network-layer isolation via Cisco ACLs **plus** appli
 
 ### Network layer (Cisco ACLs)
 
-The ESP32 sensor will operate on **VLAN 31 (IOT-AUTO)** once the MQTT broker migrates to the Raspberry Pi. The IOT-AUTO ACL restricts traffic to:
+The ESP32 sensor operates on **VLAN 31 (IOT-AUTO)**. The IOT-AUTO ACL restricts traffic to:
 
 - **DNS (UDP/TCP 53)** to Pi-hole only (192.168.10.16)
 - **MQTT (TCP 1883, 8883)** to the Pi only (192.168.10.16)
@@ -252,11 +255,11 @@ MQTT connections require username/password authentication. Anonymous access is d
 
 ### Encryption roadmap
 
-Currently MQTT traffic is unencrypted (plain TCP on port 1883). When the broker migrates to the Raspberry Pi, TLS will be added:
+Currently MQTT traffic is unencrypted (plain TCP on port 1883). TLS is planned for the next phase:
 
 - Mosquitto configured for MQTT over TLS on port 8883
 - ESP32 firmware updated to use `WiFiClientSecure` with certificate pinning
-- The IOT-AUTO ACL already permits port 8883 in anticipation of this migration
+- The IOT-AUTO ACL already permits port 8883 in anticipation of this
 
 This will complete the security stack: **network isolation (VLAN + ACL) → authentication (username/password) → authorization (topic ACLs) → encryption (TLS).**
 
@@ -266,71 +269,92 @@ This will complete the security stack: **network isolation (VLAN + ACL) → auth
 
 1. Copy `config.example.h` to `config.h` and fill in WiFi credentials, MQTT broker IP, and MQTT credentials
 2. Install toolchain:
-   ```bash
-   brew install arduino-cli mosquitto
+   ```powershell
+   # Install arduino-cli (Windows — download from https://arduino.github.io/arduino-cli)
    arduino-cli core install esp32:esp32
    arduino-cli lib install "PubSubClient" "Adafruit BME280 Library" "Adafruit Unified Sensor"
    ```
 3. Compile and upload (hold BOOT button on ESP32 during upload):
-   ```bash
-   arduino-cli compile --fqbn esp32:esp32:esp32 .
-   arduino-cli upload -p /dev/cu.usbserial-0001 --fqbn esp32:esp32:esp32 .
+   ```powershell
+   arduino-cli compile --fqbn esp32:esp32:esp32 "C:\Users\jbm06\closet-monitor"
+   arduino-cli upload -p COM3 --fqbn esp32:esp32:esp32 "C:\Users\jbm06\closet-monitor"
+   # Check Device Manager for the correct COM port
    ```
 
-### Mosquitto broker
+### Mosquitto broker (Raspberry Pi)
+
+Mosquitto runs on the Pi at 192.168.10.16. SSH in to manage it:
 
 ```bash
-brew install mosquitto
-# Create password file with device and subscriber users
-mosquitto_passwd -c /opt/homebrew/etc/mosquitto/passwordfile closet-sensor
-mosquitto_passwd /opt/homebrew/etc/mosquitto/passwordfile closet-subscriber
-# Copy aclfile to /opt/homebrew/etc/mosquitto/aclfile
-# Configure mosquitto.conf:
+ssh <pi-user>@192.168.10.16
+
+# Install
+sudo apt install mosquitto mosquitto-clients
+
+# Create password file
+sudo mosquitto_passwd -c /etc/mosquitto/passwordfile closet-sensor
+sudo mosquitto_passwd /etc/mosquitto/passwordfile closet-subscriber
+
+# Configure /etc/mosquitto/mosquitto.conf:
 #   listener 1883 0.0.0.0
 #   allow_anonymous false
-#   password_file /opt/homebrew/etc/mosquitto/passwordfile
-#   acl_file /opt/homebrew/etc/mosquitto/aclfile
-brew services start mosquitto
+#   password_file /etc/mosquitto/passwordfile
+#   acl_file /etc/mosquitto/aclfile
+
+sudo systemctl enable mosquitto
+sudo systemctl start mosquitto
 ```
 
-### Subscriber + Alert Listener
+### Subscriber + Alert Listener (Acer)
 
-```bash
-cd subscriber
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env       # edit with your broker IP and MQTT credentials
-
-# Terminal 1: data subscriber
-python subscriber.py
-
-# Terminal 2: alert listener
-python alert_listener.py
+```powershell
+cd C:\Users\jbm06\closet-monitor\subscriber
+python -m venv venv
+& ".\venv\Scripts\pip.exe" install -r requirements.txt
+copy .env.example .env    # edit with broker IP, MQTT credentials, and NTFY_TOPIC
 ```
+
+All three services (subscriber, alert listener, dashboard) are managed by a Windows Scheduled Task that starts them at boot:
+
+```powershell
+# Register the task (run as Administrator)
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\Users\jbm06\closet-monitor\start-services.ps1"
+$trigger = New-ScheduledTaskTrigger -AtStartup
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0
+$principal = New-ScheduledTaskPrincipal -UserId "jbm06" -RunLevel Highest -LogonType Interactive
+Register-ScheduledTask -TaskName "ClosetMonitorServices" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force
+
+# Start immediately without rebooting
+& "C:\Users\jbm06\closet-monitor\start-services.ps1"
+```
+
+Service logs are written to `data\logs\`.
 
 ### Dashboard
 
-```bash
-cd subscriber && source venv/bin/activate
-cd ../dashboard
-streamlit run dashboard.py
-# Opens at http://localhost:8501
+Dashboard starts automatically via `start-services.ps1`. Access from any device on the network:
+
+```
+http://192.168.10.11:8501
 ```
 
 ### Analysis
 
-```bash
-cd analysis
+```powershell
+cd C:\Users\jbm06\closet-monitor\subscriber
+& ".\venv\Scripts\activate.ps1"
+cd ..\analysis
 jupyter lab
 ```
 
 ### Verify the pipeline
 
-```bash
-# Authenticated subscribe (replace credentials)
-mosquitto_sub -h <broker-ip> -u closet-subscriber -P '<password>' -t "home/closet/#" -v
-sqlite3 data/closet.db "SELECT COUNT(*) FROM readings;"
+```powershell
+# Check subscriber log for live readings
+Get-Content "C:\Users\jbm06\closet-monitor\data\logs\subscriber-error.log" -Wait
+
+# Count total readings in database
+& "C:\Users\jbm06\closet-monitor\subscriber\venv\Scripts\python.exe" -c "import sqlite3; c=sqlite3.connect('data/closet.db'); print(c.execute('SELECT COUNT(*) FROM readings').fetchone())"
 ```
 
 ## Design decisions
@@ -353,20 +377,22 @@ sqlite3 data/closet.db "SELECT COUNT(*) FROM readings;"
 closet-monitor/
 ├── closet-monitor.ino                 # ESP32 firmware
 ├── config.example.h                   # Firmware config template
+├── start-services.ps1                 # Launches subscriber, alert listener, dashboard
 ├── case-design/
 │   ├── esp32_case.scad                # OpenSCAD source (ESP32 enclosure)
 │   ├── esp32_case.stl                 # Print-ready STL
 │   ├── sensor_pod.scad                # OpenSCAD source (BME280 pod)
 │   ├── sensor_pod.stl                 # Print-ready STL
-│   └── PRINT_SPEC.md                 # Print settings and service recommendations
+│   └── PRINT_SPEC.md                  # Print settings and service recommendations
 ├── data/
 │   ├── sample-overnight-*.log         # Sample dataset
-│   └── closet.db                      # Live SQLite database (gitignored)
+│   ├── closet.db                      # Live SQLite database (gitignored)
+│   └── logs/                          # Service stdout/stderr logs (gitignored)
 ├── subscriber/
 │   ├── subscriber.py                  # MQTT → SQLite service (authenticated)
-│   ├── alert_listener.py             # Alert notifications + runbook actions (authenticated)
+│   ├── alert_listener.py              # Alert notifications + runbook actions (authenticated)
 │   ├── requirements.txt               # Python dependencies
-│   └── .env.example                   # Config template (includes MQTT credentials)
+│   └── .env.example                   # Config template (MQTT + ntfy credentials)
 ├── analysis/
 │   ├── 01-exploratory-analysis.ipynb  # Exploratory data analysis + HVAC cycle detection
 │   └── 02-anomaly-detection.ipynb     # Rate-of-change anomaly detection
@@ -390,17 +416,22 @@ closet-monitor/
 - [x] Rate-of-change anomaly detection with rolling z-score
 - [x] Detected real-world events from sensor signatures (door closing, human presence)
 - [x] Streamlit dashboard framed around stakeholder questions
-- [x] Alert listener with macOS notifications and action runbooks
+- [x] Alert listener with action runbooks
 - [x] 3D-printable case design (ESP32 enclosure + sensor pod)
 - [x] MQTT authentication (per-device username/password)
 - [x] MQTT topic-level ACLs (write-only sensor, read-only subscriber)
+- [x] Migrate Mosquitto broker to Raspberry Pi (192.168.10.16, VLAN 10)
+- [x] Migrate subscriber, alert listener, and dashboard to Acer (192.168.10.11, VLAN 10)
+- [x] Windows service management via Scheduled Task + start-services.ps1
+- [x] Alert notifications updated for Windows (winotify + ntfy)
+- [x] Static IP assigned to Acer NIC
 
 ### Next
-- [ ] TLS encryption for MQTT (port 8883) during Pi migration
+- [ ] TLS encryption for MQTT (port 8883)
+- [ ] Configure ntfy topic for mobile push alerts
 - [ ] Ecobee integration via Home Assistant HomeKit Controller
 - [ ] Cross-correlation analysis: closet temp vs. thermostat schedule
 - [ ] AI-generated daily summary reports
-- [ ] Migrate broker + services to production server (Acer)
 
 ### Platform
 - [ ] Install Home Assistant on Raspberry Pi 5
@@ -424,7 +455,7 @@ The temptation with a project like this is to split it into multiple repos — o
 
 This sensor is one node in a broader home lab network documented at [git-init-home-lab](https://github.com/design1-software/git-init-home-lab).
 
-The ESP32 currently connects via the Gorgeous SSID (VLAN 20, TRUSTED) and publishes MQTT to a Mosquitto broker on the MacBook Pro. When Mosquitto migrates to the Raspberry Pi 4B (192.168.10.16, VLAN 10, SERVER), the ESP32 will move to the Gorgeous-Auto SSID (VLAN 31, IOT-AUTO) — a dedicated automation VLAN that permits only MQTT and DNS traffic to the Pi via Cisco ACLs.
+The ESP32 connects via the Gorgeous-Auto SSID (VLAN 31, IOT-AUTO) and publishes MQTT to a Mosquitto broker on the Raspberry Pi 4B (192.168.10.16, VLAN 10, SERVER). The IOT-AUTO ACL on the Cisco C1111 permits only MQTT (port 1883) and DNS traffic from VLAN 31 to the Pi — a compromised ESP32 cannot reach anything else on the network. The subscriber, alert listener, and Streamlit dashboard run on the Acer (jmg-server, 192.168.10.11, VLAN 10), started at boot via a Windows Scheduled Task.
 
 ## Author
 
