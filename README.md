@@ -213,6 +213,35 @@ Every alert includes three things: **what happened, why it matters, and what to 
 
 Alerts are delivered via Windows toast notifications (winotify) and ntfy push notifications to mobile, and logged to both a flat file (`alerts.log`) and the SQLite `alerts` table for dashboard display and historical analysis. Configure `NTFY_TOPIC` in `.env` to enable push delivery.
 
+**Self-hosted / unified alerting:** point `NTFY_URL` at a self-hosted ntfy hub (instead of the public `https://ntfy.sh`) to route closet alerts into a home-lab-wide notification channel shared with other monitoring tiers. See `subscriber/.env.example`.
+
+## Resilience
+
+Two Windows scheduled tasks keep the pipeline running unattended:
+
+| Task | Trigger | Purpose |
+|---|---|---|
+| `ClosetMonitorServices` | At boot | Runs `start-services.ps1` after a reboot |
+| `ClosetMonitorWatchdog` | Every 5 min | Runs `watchdog.ps1` — self-heals a crash between reboots |
+
+The watchdog restarts the stack if the dashboard (`:8501`) is down **or** the
+subscriber hasn't written a reading in 10 minutes (kills stale processes first,
+then re-runs `start-services.ps1`; logs only when it acts, to `data/logs/watchdog.log`).
+Register it once from an elevated PowerShell:
+
+```powershell
+.\register-watchdog.ps1
+```
+
+## Grafana / Prometheus integration
+
+For a single-pane-of-glass view alongside infrastructure metrics, `exporter/`
+provides a small MQTT→Prometheus bridge: it subscribes to
+`home/closet/environment` and exposes temp/humidity/pressure/RSSI as Prometheus
+gauges on `:9110`. Prometheus scrapes it; Grafana graphs it. This is a
+**complementary** feed — the Streamlit dashboard remains the primary UI. See
+[`exporter/README.md`](exporter/README.md).
+
 ## Security
 
 Defense-in-depth approach: network-layer isolation via Cisco ACLs **plus** application-layer authentication and authorization via Mosquitto.
@@ -378,6 +407,13 @@ closet-monitor/
 ├── closet-monitor.ino                 # ESP32 firmware
 ├── config.example.h                   # Firmware config template
 ├── start-services.ps1                 # Launches subscriber, alert listener, dashboard
+├── watchdog.ps1                       # Self-heals the stack (dashboard/subscriber down)
+├── register-watchdog.ps1              # Registers the ClosetMonitorWatchdog task
+├── exporter/                          # MQTT → Prometheus bridge (Grafana integration)
+│   ├── mqtt_exporter.py               # Exposes closet_* gauges on :9110
+│   ├── Dockerfile
+│   ├── README.md
+│   └── .env.example
 ├── case-design/
 │   ├── esp32_case.scad                # OpenSCAD source (ESP32 enclosure)
 │   ├── esp32_case.stl                 # Print-ready STL
