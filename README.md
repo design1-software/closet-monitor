@@ -213,6 +213,35 @@ Every alert includes three things: **what happened, why it matters, and what to 
 
 Alerts are delivered via Windows toast notifications (winotify) and ntfy push notifications to mobile, and logged to both a flat file (`alerts.log`) and the SQLite `alerts` table for dashboard display and historical analysis. Configure `NTFY_TOPIC` in `.env` to enable push delivery.
 
+**Self-hosted / unified alerting:** point `NTFY_URL` at a self-hosted ntfy hub (instead of the public `https://ntfy.sh`) to route closet alerts into a home-lab-wide notification channel shared with other monitoring tiers. See `subscriber/.env.example`.
+
+## Resilience
+
+Two Windows scheduled tasks keep the pipeline running unattended:
+
+| Task | Trigger | Purpose |
+|---|---|---|
+| `ClosetMonitorServices` | At boot | Runs `start-services.ps1` after a reboot |
+| `ClosetMonitorWatchdog` | Every 5 min | Runs `watchdog.ps1` — self-heals a crash between reboots |
+
+The watchdog restarts the stack if the dashboard (`:8501`) is down **or** the
+subscriber hasn't written a reading in 10 minutes (kills stale processes first,
+then re-runs `start-services.ps1`; logs only when it acts, to `data/logs/watchdog.log`).
+Register it once from an elevated PowerShell:
+
+```powershell
+.\register-watchdog.ps1
+```
+
+## Grafana / Prometheus integration
+
+For a single-pane-of-glass view alongside infrastructure metrics, `exporter/`
+provides a small MQTT→Prometheus bridge: it subscribes to
+`home/closet/environment` and exposes temp/humidity/pressure/RSSI as Prometheus
+gauges on `:9110`. Prometheus scrapes it; Grafana graphs it. This is a
+**complementary** feed — the Streamlit dashboard remains the primary UI. See
+[`exporter/README.md`](exporter/README.md).
+
 ## Security
 
 Defense-in-depth approach: network-layer isolation via Cisco ACLs **plus** application-layer authentication and authorization via Mosquitto.
@@ -267,19 +296,48 @@ This will complete the security stack: **network isolation (VLAN + ACL) → auth
 
 ### Firmware
 
-1. Copy `config.example.h` to `config.h` and fill in WiFi credentials, MQTT broker IP, and MQTT credentials
-2. Install toolchain:
-   ```powershell
-   # Install arduino-cli (Windows — download from https://arduino.github.io/arduino-cli)
+Works the same on macOS, Linux, and Windows — only the serial **port** differs.
+
+1. **Config.** Copy `config.example.h` to `config.h` and fill in the WiFi SSID/PSK,
+   MQTT broker IP, and MQTT credentials.
+
+   *Running more than one device?* Keep a per-device config and copy the active one
+   into place before flashing (all `config-*.h` are gitignored):
+   ```bash
+   cp config-closet-01.h config.h    # or config-closet-lab.h, etc.
+   ```
+
+2. **Toolchain** (one-time):
+   ```bash
+   arduino-cli core update-index --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
    arduino-cli core install esp32:esp32
    arduino-cli lib install "PubSubClient" "Adafruit BME280 Library" "Adafruit Unified Sensor"
    ```
-3. Compile and upload (hold BOOT button on ESP32 during upload):
-   ```powershell
-   arduino-cli compile --fqbn esp32:esp32:esp32 "C:\Users\jbm06\closet-monitor"
-   arduino-cli upload -p COM3 --fqbn esp32:esp32:esp32 "C:\Users\jbm06\closet-monitor"
-   # Check Device Manager for the correct COM port
+
+3. **Find the port** (plug the ESP32 in via USB):
+   ```bash
+   arduino-cli board list
    ```
+   | OS | Typical port |
+   |---|---|
+   | macOS | `/dev/cu.usbserial-XXXX` (or `/dev/cu.usbmodemXXXX`) |
+   | Linux | `/dev/ttyUSB0` (or `/dev/ttyACM0`) |
+   | Windows | `COM3` (check Device Manager) |
+
+   The board may show as **"Unknown"** — that's normal for generic ESP32 dev boards.
+
+4. **Compile + upload** (run from the repo directory, with `config.h` in place). If
+   upload sticks at `Connecting….____`, hold the **BOOT** button until it starts writing.
+   ```bash
+   arduino-cli compile --fqbn esp32:esp32:esp32 .
+   arduino-cli upload  -p <PORT> --fqbn esp32:esp32:esp32 .
+   ```
+
+5. **Watch it boot** (optional):
+   ```bash
+   arduino-cli monitor -p <PORT> -c baudrate=115200
+   ```
+   Expect: WiFi joined → IP acquired → MQTT connected → readings publishing.
 
 ### Mosquitto broker (Raspberry Pi)
 
@@ -378,6 +436,13 @@ closet-monitor/
 ├── closet-monitor.ino                 # ESP32 firmware
 ├── config.example.h                   # Firmware config template
 ├── start-services.ps1                 # Launches subscriber, alert listener, dashboard
+├── watchdog.ps1                       # Self-heals the stack (dashboard/subscriber down)
+├── register-watchdog.ps1              # Registers the ClosetMonitorWatchdog task
+├── exporter/                          # MQTT → Prometheus bridge (Grafana integration)
+│   ├── mqtt_exporter.py               # Exposes closet_* gauges on :9110
+│   ├── Dockerfile
+│   ├── README.md
+│   └── .env.example
 ├── case-design/
 │   ├── esp32_case.scad                # OpenSCAD source (ESP32 enclosure)
 │   ├── esp32_case.stl                 # Print-ready STL

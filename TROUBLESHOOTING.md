@@ -266,7 +266,7 @@ SSH into the Pi and publish a test alert:
 
 ```bash
 ssh <pi-user>@192.168.10.16
-mosquitto_pub -h 192.168.10.16 -u closet-sensor -P 'ClosetMonitor2026' \
+mosquitto_pub -h 192.168.10.16 -u closet-sensor -P '<your-mqtt-password>' \
   -t "home/closet/alerts/temperature" \
   -m '{"alert":true,"temp_f":86.0,"threshold_high":85.0,"threshold_low":50.0}'
 ```

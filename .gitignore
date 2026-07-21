@@ -1,6 +1,10 @@
-cat > .gitignore << 'EOF'
 # Local secrets — never commit
+# config.h is the active firmware config; config-*.h are per-device variants
+# (e.g. config-closet-01.h, config-closet-lab.h) — all hold real credentials.
 config.h
+config-*.h
+.env
+**/.env
 
 # Log files
 *.log
@@ -14,11 +18,10 @@ build/
 *.hex
 *.bin
 *.elf
-EOF
+
 # Python
 subscriber/venv/
 subscriber/__pycache__/
-subscriber/.env
 *.pyc
 
 # Database (regenerable from logs/MQTT)

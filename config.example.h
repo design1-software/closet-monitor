@@ -1,9 +1,8 @@
-cat > config.example.h << 'EOF'
 #ifndef CONFIG_H
 #define CONFIG_H
 
 // Copy this file to config.h and fill in your values.
-// config.h is gitignored — never commit real credentials.
+// config.h and config-*.h are gitignored — never commit real credentials.
 
 #define WIFI_SSID       "YOUR_WIFI_SSID"
 #define WIFI_PASSWORD   "YOUR_WIFI_PASSWORD"
@@ -23,4 +22,3 @@ cat > config.example.h << 'EOF'
 #define HUMIDITY_LOW_PCT     25.0
 
 #endif
-EOF
