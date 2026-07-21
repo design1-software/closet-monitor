@@ -1,5 +1,8 @@
 # Local secrets — never commit
+# config.h is the active firmware config; config-*.h are per-device variants
+# (e.g. config-closet-01.h, config-closet-lab.h) — all hold real credentials.
 config.h
+config-*.h
 .env
 **/.env
 

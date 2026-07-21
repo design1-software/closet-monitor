@@ -296,19 +296,48 @@ This will complete the security stack: **network isolation (VLAN + ACL) → auth
 
 ### Firmware
 
-1. Copy `config.example.h` to `config.h` and fill in WiFi credentials, MQTT broker IP, and MQTT credentials
-2. Install toolchain:
-   ```powershell
-   # Install arduino-cli (Windows — download from https://arduino.github.io/arduino-cli)
+Works the same on macOS, Linux, and Windows — only the serial **port** differs.
+
+1. **Config.** Copy `config.example.h` to `config.h` and fill in the WiFi SSID/PSK,
+   MQTT broker IP, and MQTT credentials.
+
+   *Running more than one device?* Keep a per-device config and copy the active one
+   into place before flashing (all `config-*.h` are gitignored):
+   ```bash
+   cp config-closet-01.h config.h    # or config-closet-lab.h, etc.
+   ```
+
+2. **Toolchain** (one-time):
+   ```bash
+   arduino-cli core update-index --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
    arduino-cli core install esp32:esp32
    arduino-cli lib install "PubSubClient" "Adafruit BME280 Library" "Adafruit Unified Sensor"
    ```
-3. Compile and upload (hold BOOT button on ESP32 during upload):
-   ```powershell
-   arduino-cli compile --fqbn esp32:esp32:esp32 "C:\Users\jbm06\closet-monitor"
-   arduino-cli upload -p COM3 --fqbn esp32:esp32:esp32 "C:\Users\jbm06\closet-monitor"
-   # Check Device Manager for the correct COM port
+
+3. **Find the port** (plug the ESP32 in via USB):
+   ```bash
+   arduino-cli board list
    ```
+   | OS | Typical port |
+   |---|---|
+   | macOS | `/dev/cu.usbserial-XXXX` (or `/dev/cu.usbmodemXXXX`) |
+   | Linux | `/dev/ttyUSB0` (or `/dev/ttyACM0`) |
+   | Windows | `COM3` (check Device Manager) |
+
+   The board may show as **"Unknown"** — that's normal for generic ESP32 dev boards.
+
+4. **Compile + upload** (run from the repo directory, with `config.h` in place). If
+   upload sticks at `Connecting….____`, hold the **BOOT** button until it starts writing.
+   ```bash
+   arduino-cli compile --fqbn esp32:esp32:esp32 .
+   arduino-cli upload  -p <PORT> --fqbn esp32:esp32:esp32 .
+   ```
+
+5. **Watch it boot** (optional):
+   ```bash
+   arduino-cli monitor -p <PORT> -c baudrate=115200
+   ```
+   Expect: WiFi joined → IP acquired → MQTT connected → readings publishing.
 
 ### Mosquitto broker (Raspberry Pi)
 
