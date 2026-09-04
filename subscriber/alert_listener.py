@@ -97,8 +97,13 @@ def notify_ntfy(title: str, message: str, severity: str = "INFO") -> None:
         import requests
         requests.post(
             f"{NTFY_URL}/{NTFY_TOPIC}",
-            data=message.encode("utf-8"),
-            headers={"Title": title, "Priority": _NTFY_PRIORITY.get(severity, "default")},
+            # HTTP headers are latin-1 (RFC 7230), but these alert titles carry emoji
+            # (e.g. "⚠️ Closet Sensor Offline"), so setting them as the ntfy Title header
+            # raised UnicodeEncodeError and every push notification was silently dropped.
+            # ASCII-fold the header and keep the full title in the UTF-8 body instead.
+            data=(title + "\n" + message).encode("utf-8"),
+            headers={"Title": title.encode("ascii", "ignore").decode().strip() or "Closet Monitor",
+                     "Priority": _NTFY_PRIORITY.get(severity, "default")},
             timeout=5,
         )
         log.info(f"ntfy notification sent: {title}")
